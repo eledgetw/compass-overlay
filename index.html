@@ -23,9 +23,7 @@
 </head>
 <body class="bg-slate-100 h-screen flex flex-col overflow-hidden font-sans">
 
-    <!-- 主要視圖區 -->
     <div id="viewport" class="relative flex-1 overflow-hidden bg-slate-800 cursor-grab active:cursor-grabbing touch-none">
-        <!-- 提示文字 -->
         <div id="placeholderText" class="absolute inset-0 flex flex-col items-center justify-center text-slate-400 z-0 pointer-events-none">
             <svg class="w-16 h-16 mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"></path></svg>
             <p class="text-xl font-medium text-slate-300">請直接在此頁面貼上圖片</p>
@@ -33,17 +31,14 @@
             <p class="text-sm mt-4">貼上後可拖曳圖片對齊中心十字</p>
         </div>
 
-        <!-- 使用者圖片 -->
         <img id="targetImage" class="absolute origin-top-left" style="display:none; pointer-events: none;" alt="User image">
         
-        <!-- 覆蓋層：畫布 (用於繪製十二方位及中心點) -->
         <canvas id="overlayCanvas" class="absolute inset-0 pointer-events-none z-10"></canvas>
 
-        <!-- 右側直向縮放控制 -->
-        <div class="absolute right-6 top-1/2 -translate-y-1/2 flex flex-col items-center gap-3 bg-slate-900/70 p-4 rounded-full shadow-2xl backdrop-blur-sm z-20 border border-slate-700/50">
-            <span class="text-white text-lg font-medium" title="放大">➕</span>
-            <input type="range" id="zoomSlider" orient="vertical" min="0.1" max="5" step="0.05" value="1" class="cursor-pointer outline-none">
-            <span class="text-white text-lg font-medium" title="縮小">➖</span>
+        <div id="zoomControls" class="absolute right-6 top-1/2 -translate-y-1/2 flex flex-col items-center gap-3 bg-slate-900/70 p-4 rounded-full shadow-2xl backdrop-blur-sm z-20 border border-slate-700/50">
+            <span class="text-white text-lg font-medium select-none" title="放大">➕</span>
+            <input type="range" id="zoomSlider" orient="vertical" min="0" max="100" step="1" value="50" class="cursor-pointer outline-none">
+            <span class="text-white text-lg font-medium select-none" title="縮小">➖</span>
         </div>
     </div>
 
@@ -171,9 +166,9 @@
                     placeholderText.style.display = 'none';
                     img.style.display = 'block';
                     
-                    // 重置比例
+                    // 重置比例為原圖大小 1.0 (對應拉桿中點 50)
                     scale = 1;
-                    zoomSlider.value = 1;
+                    zoomSlider.value = 50;
                     
                     // 初始置中圖片
                     const cx = viewport.clientWidth / 2;
@@ -223,8 +218,7 @@
 
         // 滑鼠事件
         viewport.addEventListener('mousedown', (e) => {
-            // 如果點擊到右側縮放面板，則不觸發拖曳
-            if(e.target.closest('.z-20')) return;
+            if(e.target.closest('#zoomControls')) return;
             startDrag(e.clientX, e.clientY);
         });
         window.addEventListener('mousemove', (e) => moveDrag(e.clientX, e.clientY));
@@ -232,7 +226,7 @@
 
         // 觸控事件 (支援手機)
         viewport.addEventListener('touchstart', (e) => {
-            if(e.target.closest('.z-20')) return;
+            if(e.target.closest('#zoomControls')) return;
             if (e.touches.length === 1) {
                 startDrag(e.touches[0].clientX, e.touches[0].clientY);
             }
@@ -257,7 +251,13 @@
             const delta = -e.deltaY * zoomSensitivity;
             const oldScale = scale;
             scale = Math.min(Math.max(0.1, scale + delta), 5); // 限制縮放範圍 0.1x ~ 5x
-            zoomSlider.value = scale;
+            
+            // 將目前的 scale 值映射回 0 ~ 100 範圍的拉桿數值
+            if (scale <= 1) {
+                zoomSlider.value = Math.round(((scale - 0.1) / 0.9) * 50);
+            } else {
+                zoomSlider.value = Math.round(50 + ((scale - 1) / 4) * 50);
+            }
             
             // 以畫面中心為基準點進行縮放計算
             const cx = viewport.clientWidth / 2;
@@ -271,7 +271,16 @@
         // 拉桿縮放
         zoomSlider.addEventListener('input', (e) => {
             if (img.style.display === 'none') return;
-            const newScale = parseFloat(e.target.value);
+            const val = parseFloat(e.target.value);
+            
+            // 將 0 ~ 100 的拉桿數值映射為非線性縮放比例 (0.1 ~ 1.0 ~ 5.0)
+            let newScale;
+            if (val <= 50) {
+                newScale = 0.1 + (val / 50) * 0.9;
+            } else {
+                newScale = 1.0 + ((val - 50) / 50) * 4.0;
+            }
+            
             const oldScale = scale;
             const cx = viewport.clientWidth / 2;
             const cy = viewport.clientHeight / 2;
@@ -282,9 +291,10 @@
             updateImgTransform();
         });
         
-        // 防止拉桿觸發父層拖曳
-        zoomSlider.addEventListener('mousedown', (e) => e.stopPropagation());
-        zoomSlider.addEventListener('touchstart', (e) => e.stopPropagation());
+        // 防止拉桿與其外框觸發父層拖曳
+        const zoomControls = document.getElementById('zoomControls');
+        zoomControls.addEventListener('mousedown', (e) => e.stopPropagation());
+        zoomControls.addEventListener('touchstart', (e) => e.stopPropagation());
 
     </script>
 </body>
